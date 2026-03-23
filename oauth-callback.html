@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FigPM OAuth Callback</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: linear-gradient(135deg, #0d99ff 0%, #007acc 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .container {
+      text-align: center;
+      color: white;
+    }
+    h1 { font-size: 20px; margin-bottom: 12px; }
+    p { font-size: 14px; opacity: 0.9; margin-bottom: 20px; }
+    .spinner {
+      width: 40px;
+      height: 40px;
+      border: 3px solid rgba(255, 255, 255, 0.3);
+      border-top-color: white;
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+      margin: 0 auto 20px;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error {
+      background: rgba(255, 0, 0, 0.2);
+      border: 1px solid rgba(255, 0, 0, 0.5);
+      padding: 16px;
+      border-radius: 8px;
+      margin-top: 20px;
+      font-size: 13px;
+      text-align: left;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="spinner"></div>
+    <h1>Connecting to Figma…</h1>
+    <p>Completing your FigPM setup. This window will close shortly.</p>
+    <div id="error" class="error" style="display: none;"></div>
+  </div>
+
+  <script>
+    /**
+     * FigPM OAuth Callback Handler
+     * ──────────────────────────────────────────────────────────────────────
+     * This page is opened by the plugin when the user clicks "Connect with Figma OAuth".
+     * Figma redirects here with an authorization code in the URL.
+     * This script:
+     *   1. Extracts the auth code from the URL
+     *   2. Exchanges it for an access token (via your backend, or stores the code)
+     *   3. Sends the token back to the plugin via postMessage
+     *   4. Closes the window
+     *
+     * NOTE: For simplicity, we send the auth code back to the plugin, which then
+     * exchanges it for a token on the backend. In a real app, you'd exchange it
+     * here on your backend before returning the token.
+     * ──────────────────────────────────────────────────────────────────────
+     */
+
+    // Parse URL parameters
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const state = params.get('state');
+    const error = params.get('error');
+
+    function showError(msg) {
+      document.getElementById('error').textContent = msg;
+      document.getElementById('error').style.display = 'block';
+    }
+
+    // Handle OAuth errors from Figma
+    if (error) {
+      showError('Figma OAuth error: ' + error);
+      setTimeout(() => window.close(), 3000);
+    } else if (!code) {
+      showError('No authorization code received from Figma.');
+      setTimeout(() => window.close(), 3000);
+    } else {
+      // We have the auth code. In a real app, send this to your backend to exchange
+      // for an access token. For now, we'll send the code back and let the plugin
+      // or a backend handle the token exchange.
+
+      // Send code back to the plugin window (opener)
+      // The plugin will need to exchange this for a token via a backend endpoint
+      if (window.opener) {
+        window.opener.postMessage({
+          pluginMessage: {
+            type: 'oauth-code',
+            code: code,
+            state: state,
+          }
+        }, '*');
+
+        // For testing: if you want to proceed with just the code as a "token",
+        // uncomment the line below. In production, wait for your backend to
+        // exchange the code for a real token first.
+
+        // window.opener.postMessage({
+        //   pluginMessage: {
+        //     type: 'oauth-token',
+        //     token: 'code_' + code,  // fake token for testing
+        //   }
+        // }, '*');
+
+        // Close this window after a short delay
+        setTimeout(() => window.close(), 500);
+      } else {
+        showError('Could not communicate with plugin. Please try again.');
+        setTimeout(() => window.close(), 3000);
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,1039 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+
+<!--
+  FigPM — ui.html (OAuth version)
+  ─────────────────────────────────────────────────────────────────────────────
+  This is the entire plugin UI. It runs in an isolated iframe inside Figma.
+  It cannot access the Figma Plugin API directly — all communication with
+  Figma happens via postMessage to/from code.js.
+
+  Three screens (only one visible at a time):
+    #setup-screen   — first-time setup: OAuth button
+    #loading-screen — spinner shown while fetching from Figma API
+    #plugin-screen  — main comment tracking view
+
+  Design system: see figpm-design-system.md for full token reference.
+  ─────────────────────────────────────────────────────────────────────────────
+-->
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FigPM</title>
+
+  <style>
+
+    /* ── RESET ───────────────────────────────────────────────────────────── */
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+
+    /* ── DARK THEME TOKENS ───────────────────────────────────────────────── */
+    /* Default theme. Matches Figma's native dark UI exactly. */
+    [data-theme="dark"] {
+      --bg:              #2c2c2c;  /* primary surface — matches Figma panel bg */
+      --bg-elevated:     #383838;  /* elevated panels, hover states */
+      --bg-input:        #1e1e1e;  /* input field background */
+      --bg-pill:         #3a3a3a;  /* pill group container background */
+      --bg-pill-hover:   #464646;  /* pill button hover state */
+      --bg-active:       #505050;  /* active/selected pill button */
+      --border:          rgba(255, 255, 255, 0.10);  /* general borders */
+      --border-pill:     rgba(255, 255, 255, 0.12);  /* pill group border */
+      --divider:         rgba(255, 255, 255, 0.07);  /* row dividers */
+      --text1:           #e5e5e5;  /* primary text */
+      --text2:           #b0b0b0;  /* secondary text */
+      --text3:           #707070;  /* muted / hint text */
+      --row-hover:       rgba(255, 255, 255, 0.05);  /* comment row hover */
+      --selected-bg:     rgba(255, 255, 255, 0.07);  /* selected comment row */
+      --scrollbar:       #484848;  /* scrollbar thumb */
+    }
+
+
+    /* ── LIGHT THEME TOKENS ──────────────────────────────────────────────── */
+    /* Matches Figma's native light UI. */
+    [data-theme="light"] {
+      --bg:              #ffffff;
+      --bg-elevated:     #f5f5f5;
+      --bg-input:        #f0f0f0;
+      --bg-pill:         #ebebeb;
+      --bg-pill-hover:   #e0e0e0;
+      --bg-active:       #d8d8d8;
+      --border:          rgba(0, 0, 0, 0.10);
+      --border-pill:     rgba(0, 0, 0, 0.12);
+      --divider:         rgba(0, 0, 0, 0.06);
+      --text1:           #1a1a1a;
+      --text2:           #555555;
+      --text3:           #999999;
+      --row-hover:       rgba(0, 0, 0, 0.04);
+      --selected-bg:     rgba(0, 0, 0, 0.06);
+      --scrollbar:       #c8c8c8;
+    }
+
+
+    /* ── SEMANTIC COLOR TOKENS ───────────────────────────────────────────── */
+    /* These do not change between themes. Used for status colors and actions. */
+    :root {
+      --blue:        #0d99ff;                    /* Figma brand blue — primary CTA */
+      --blue-dim:    rgba(13, 153, 255, 0.15);
+      --green:       #14ae5c;                    /* done / success / connected */
+      --green-dim:   rgba(20, 174, 92, 0.13);
+      --amber:       #f59e0b;                    /* in progress / warning */
+      --amber-dim:   rgba(245, 158, 11, 0.13);
+      --red:         #f24822;                    /* clarify / error / Figma red */
+      --red-dim:     rgba(242, 72, 34, 0.13);
+    }
+
+
+    /* ── BASE BODY ───────────────────────────────────────────────────────── */
+    body {
+      font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+      background: var(--bg);
+      color: var(--text1);
+      font-size: 11px;
+      width: 280px;         /* fixed plugin width — do not change */
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      line-height: 1.4;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    /* Utility: hide any element */
+    .hidden {
+      display: none !important;
+    }
+
+
+    /* ── BUTTON SYSTEM ───────────────────────────────────────────────────── */
+
+    /*
+     * Single icon button (.fig-btn)
+     * Used for toolbar actions: sync, theme toggle.
+     * 28×28px, transparent background, icon only.
+     */
+    .fig-btn {
+      width: 28px;
+      height: 28px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      background: transparent;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      color: var(--text3);
+      transition: background 0.1s, color 0.12s;
+      flex-shrink: 0;
+    }
+    .fig-btn:hover  { background: var(--bg-pill-hover); color: var(--text2); }
+    .fig-btn.active { background: var(--bg-active);     color: var(--text1); }
+    .fig-btn svg    { width: 13px; height: 13px; pointer-events: none; }
+
+    /*
+     * Pill group (.pill-group)
+     * Groups related icon buttons with a shared outer border.
+     * Matches Figma's toolbar grouping pattern exactly.
+     * Contains .fig-btn children.
+     */
+    .pill-group {
+      display: inline-flex;
+      align-items: center;
+      background: var(--bg-pill);
+      border: 1px solid var(--border-pill);
+      border-radius: 7px;
+      padding: 2px;
+      gap: 1px;
+    }
+    .pill-group .fig-btn {
+      border-radius: 4px; /* slightly tighter radius inside the group */
+    }
+
+    /*
+     * Pill separator (.pill-sep)
+     * Thin vertical divider between unrelated buttons in the same pill group.
+     */
+    .pill-sep {
+      width: 1px;
+      height: 14px;
+      background: var(--border-pill);
+      margin: 0 1px;
+      flex-shrink: 0;
+    }
+
+    /*
+     * Primary action button (.sync-pill)
+     * Used for Connect and Sync buttons.
+     * Full width, blue background, white text.
+     */
+    .sync-pill {
+      width: 100%;
+      padding: 8px 12px;
+      background: var(--blue);
+      color: white;
+      border: none;
+      border-radius: 7px;
+      font-size: 11px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.1s;
+    }
+    .sync-pill:hover { opacity: 0.85; }
+    .sync-pill:active { opacity: 0.7; }
+
+
+    /* ── SETUP SCREEN ────────────────────────────────────────────────────── */
+    /*
+     * Shown on first launch or after disconnect.
+     * OAuth flow: user clicks Connect button → browser opens Figma OAuth page.
+     */
+    #setup-screen {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      padding: 14px 12px;
+    }
+
+    /* Top bar: wordmark + theme toggle */
+    .setup-topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 18px;
+    }
+
+    /* FigPM wordmark: icon mark + text */
+    .wordmark {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .wm-icon {
+      width: 18px;
+      height: 18px;
+      background: var(--blue);
+      border-radius: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .wm-icon svg  { width: 11px; height: 11px; }
+    .wm-text      { font-size: 12px; font-weight: 600; color: var(--text1); letter-spacing: -0.01em; }
+
+    /* Setup headings */
+    .s-title { font-size: 11px; font-weight: 600; color: var(--text1); margin-bottom: 3px; }
+    .s-sub   { font-size: 10px; color: var(--text3); line-height: 1.55; margin-bottom: 16px; }
+
+    /* Form field wrapper */
+    .s-field { margin-bottom: 11px; }
+
+    /* OAuth button container */
+    .oauth-container {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 12px;
+    }
+
+    /* Error message on setup screen */
+    #setup-error {
+      padding: 8px 10px;
+      background: var(--red-dim);
+      color: var(--red);
+      border-radius: 5px;
+      font-size: 10px;
+      margin-bottom: 12px;
+      display: none;
+    }
+
+
+    /* ── LOADING SCREEN ─────────────────────────────────────────────────── */
+    /*
+     * Shown while fetching comments from Figma API.
+     * Centered spinner with text.
+     */
+    #loading-screen {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+    }
+
+    .spinner {
+      width: 32px;
+      height: 32px;
+      border: 2px solid var(--bg-pill);
+      border-top-color: var(--blue);
+      border-radius: 50%;
+      animation: spin 0.6s linear infinite;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .spinner-text {
+      font-size: 11px;
+      color: var(--text2);
+    }
+
+
+    /* ── MAIN PLUGIN SCREEN ─────────────────────────────────────────────── */
+    /*
+     * Visible after successful connection.
+     * Displays comments grouped by status with filtering and status updates.
+     */
+    #plugin-screen {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Top bar: file info + sync + theme toggle */
+    .top-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 10px;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    /* File name + comment count */
+    .file-info {
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .file-name {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text1);
+    }
+    .file-ct {
+      font-size: 9px;
+      color: var(--text3);
+    }
+
+    /* Toolbar: sync + theme + disconnect buttons */
+    .toolbar {
+      display: flex;
+      gap: 6px;
+    }
+
+    /* Disconnect button — red text in icon button style */
+    .disconnect-btn {
+      width: 28px;
+      height: 28px;
+      background: transparent;
+      border: none;
+      border-radius: 5px;
+      color: var(--red);
+      cursor: pointer;
+      transition: background 0.1s, color 0.12s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .disconnect-btn:hover { background: var(--red-dim); }
+
+    /* Filter tabs */
+    .filter-bar {
+      display: flex;
+      gap: 8px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--border);
+      flex-shrink: 0;
+    }
+
+    /* Filter tab button */
+    .f-btn {
+      padding: 4px 8px;
+      background: transparent;
+      border: none;
+      border-radius: 4px;
+      color: var(--text3);
+      font-size: 10px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.1s, color 0.1s;
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+    }
+    .f-btn:hover { color: var(--text2); }
+    .f-btn.active { background: var(--blue-dim); color: var(--blue); }
+
+    /* Filter count badge */
+    .f-count {
+      font-size: 9px;
+      font-weight: 600;
+      min-width: 16px;
+      text-align: center;
+    }
+
+    /* Comments list container */
+    .comment-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 0;
+    }
+
+    /* Group label (Open, In Progress, etc.) */
+    .grp-label {
+      padding: 6px 10px;
+      font-size: 9px;
+      font-weight: 600;
+      color: var(--text3);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--border);
+      position: sticky;
+      top: 0;
+    }
+
+    /* Single comment row */
+    .c-row {
+      display: flex;
+      gap: 8px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--divider);
+      cursor: pointer;
+      transition: background 0.08s;
+      align-items: flex-start;
+    }
+    .c-row:hover { background: var(--row-hover); }
+    .c-row.sel { background: var(--selected-bg); }
+
+    /* Avatar circle */
+    .c-av {
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      background: var(--blue);
+      color: white;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 9px;
+      font-weight: 600;
+      flex-shrink: 0;
+      overflow: hidden;
+    }
+    .c-av img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+    }
+
+    /* Comment body: author, time, message, status */
+    .c-body {
+      flex: 1;
+      min-width: 0;
+    }
+
+    /* Author + time row */
+    .c-meta {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-bottom: 3px;
+    }
+    .c-author {
+      font-size: 10px;
+      font-weight: 600;
+      color: var(--text1);
+    }
+    .c-time {
+      font-size: 9px;
+      color: var(--text3);
+    }
+
+    /* Comment message */
+    .c-msg {
+      font-size: 10px;
+      color: var(--text2);
+      line-height: 1.5;
+      margin-bottom: 4px;
+      word-break: break-word;
+    }
+    .c-msg.done-txt {
+      color: var(--text3);
+      text-decoration: line-through;
+    }
+
+    /* Status badge */
+    .c-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      font-size: 9px;
+      font-weight: 600;
+      padding: 3px 6px;
+      border-radius: 3px;
+      background: var(--blue-dim);
+      color: var(--blue);
+    }
+
+    .cb-dot {
+      width: 5px;
+      height: 5px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+
+    .cb-open    { background: var(--blue-dim);   color: var(--blue); }
+    .cb-prog    { background: var(--amber-dim);  color: var(--amber); }
+    .cb-clarify { background: var(--red-dim);    color: var(--red); }
+    .cb-done    { background: var(--green-dim);  color: var(--green); }
+
+    /* Divider between rows */
+    .c-divider {
+      height: 1px;
+      background: var(--divider);
+      margin: 0 10px;
+    }
+
+    /* Expandable detail section (status change) */
+    .c-detail {
+      display: none;
+      padding: 8px 10px;
+      background: var(--bg-elevated);
+      border-bottom: 1px solid var(--divider);
+    }
+    .c-detail.open {
+      display: block;
+    }
+
+    .detail-lbl {
+      font-size: 9px;
+      font-weight: 600;
+      color: var(--text3);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-bottom: 6px;
+    }
+
+    /* Status change button group */
+    .status-pill-group {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+    }
+
+    /* Status option button */
+    .st-btn {
+      padding: 5px 8px;
+      background: var(--bg-pill);
+      border: 1px solid var(--border-pill);
+      border-radius: 4px;
+      color: var(--text2);
+      font-size: 10px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: background 0.1s, color 0.1s, border-color 0.1s;
+    }
+    .st-btn:hover { background: var(--bg-pill-hover); color: var(--text1); }
+
+    .st-open    { color: var(--blue); border-color: var(--blue); }
+    .st-open.st-btn    { background: var(--blue-dim); }
+
+    .st-prog    { color: var(--amber); border-color: var(--amber); }
+    .st-prog.st-btn    { background: var(--amber-dim); }
+
+    .st-clarify { color: var(--red); border-color: var(--red); }
+    .st-clarify.st-btn { background: var(--red-dim); }
+
+    .st-done    { color: var(--green); border-color: var(--green); }
+    .st-done.st-btn    { background: var(--green-dim); }
+
+  </style>
+
+</head>
+
+<body>
+
+  <!-- ──────────────────────────────────────────────────────────────────────
+       SETUP SCREEN — First-time OAuth flow
+       ────────────────────────────────────────────────────────────────────── -->
+  <div id="setup-screen">
+
+    <!-- Top bar: wordmark + theme toggle -->
+    <div class="setup-topbar">
+      <div class="wordmark">
+        <div class="wm-icon">
+          <svg viewBox="0 0 16 16" fill="currentColor">
+            <path d="M8 1L2 4v7c0 3.314 4 5 6 5s6-1.686 6-5V4l-6-3z"/>
+          </svg>
+        </div>
+        <div class="wm-text">FigPM</div>
+      </div>
+      <button class="fig-btn" onclick="toggleTheme()" title="Toggle theme">
+        <svg viewBox="0 0 16 16" fill="currentColor">
+          <circle cx="8" cy="8" r="3"/>
+          <path d="M8 1v2m0 10v2M15 8h-2M3 8H1M13.6 2.4l-1.4 1.4M4.2 11.8l-1.4 1.4M13.6 13.6l-1.4-1.4M4.2 4.2L2.8 2.8"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Error message (hidden by default) -->
+    <div id="setup-error"></div>
+
+    <!-- OAuth content -->
+    <div class="oauth-container">
+      <div>
+        <div class="s-title">Connect your Figma account</div>
+        <div class="s-sub">FigPM uses your Figma account to access and track feedback on your files. Your token is stored locally — never sent to our servers.</div>
+      </div>
+
+      <button class="sync-pill" onclick="handleOAuthCallback()">Connect with Figma OAuth</button>
+    </div>
+
+  </div>
+
+
+  <!-- ──────────────────────────────────────────────────────────────────────
+       LOADING SCREEN — Spinner while fetching comments
+       ────────────────────────────────────────────────────────────────────── -->
+  <div id="loading-screen" class="hidden">
+    <div class="spinner"></div>
+    <div class="spinner-text">Fetching comments…</div>
+  </div>
+
+
+  <!-- ──────────────────────────────────────────────────────────────────────
+       MAIN PLUGIN SCREEN — Comment tracking and status management
+       ────────────────────────────────────────────────────────────────────── -->
+  <div id="plugin-screen" class="hidden">
+
+    <!-- Top bar: file info + sync + disconnect + theme toggle -->
+    <div class="top-bar">
+      <div class="file-info">
+        <div class="file-name" id="file-name">Untitled</div>
+        <div class="file-ct" id="file-ct">0 comments</div>
+      </div>
+      <div class="toolbar">
+        <button class="fig-btn" onclick="fetchAndRender()" title="Sync">
+          <svg viewBox="0 0 16 16" fill="currentColor">
+            <path d="M2 8a6 6 0 1 0 12 0m-1.5 0a4.5 4.5 0 1 1-9 0 4.5 4.5 0 0 1 9 0M8 5v3m0 0l-2-2m2 2l2-2"/>
+          </svg>
+        </button>
+        <div class="pill-sep"></div>
+        <button class="fig-btn" onclick="toggleTheme()" title="Toggle theme">
+          <svg viewBox="0 0 16 16" fill="currentColor">
+            <circle cx="8" cy="8" r="3"/>
+            <path d="M8 1v2m0 10v2M15 8h-2M3 8H1M13.6 2.4l-1.4 1.4M4.2 11.8l-1.4 1.4M13.6 13.6l-1.4-1.4M4.2 4.2L2.8 2.8"/>
+          </svg>
+        </button>
+        <button class="disconnect-btn" onclick="disconnect()" title="Disconnect">
+          <svg viewBox="0 0 16 16" fill="currentColor">
+            <path d="M2 2l12 12M14 2L2 14"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Filter tabs -->
+    <div class="filter-bar">
+      <button class="f-btn active" onclick="setFilter(this, 'all')">
+        <span>All</span>
+        <span class="f-count" id="fc-all">0</span>
+      </button>
+      <button class="f-btn" onclick="setFilter(this, 'open')">
+        <span>Open</span>
+        <span class="f-count" id="fc-open">0</span>
+      </button>
+      <button class="f-btn" onclick="setFilter(this, 'resolved')">
+        <span>Resolved</span>
+        <span class="f-count" id="fc-resolved">0</span>
+      </button>
+    </div>
+
+    <!-- Comments list -->
+    <div class="comment-list" id="comment-list"></div>
+
+  </div>
+
+
+  <script>
+
+    /* ── STATE ───────────────────────────────────────────────────────────── */
+    var allComments = [];        // all comments from Figma file
+    var statuses = {};           // comment id → status override (in-memory for now)
+    var selectedId = null;       // expanded comment row
+    var currentFilter = 'all';   // active filter tab
+    var fileKey = null;          // current Figma file key
+    var fileName = '';           // current Figma file name
+    var token = null;            // Figma OAuth access token
+
+
+    /* ── INIT ────────────────────────────────────────────────────────────── */
+    // Listen for messages from code.js (Figma plugin thread).
+    // First message is always 'init' with file info and saved credentials.
+    window.addEventListener('message', function(event) {
+      const msg = event.data.pluginMessage;
+      if (!msg) return;
+
+      if (msg.type === 'init') {
+        fileKey = msg.fileKey;
+        fileName = msg.fileName;
+        token = msg.savedToken;
+
+        // If we have a saved token, skip setup and auto-connect
+        if (token) {
+          autoConnect();
+        }
+        // Otherwise show the OAuth setup screen
+      }
+
+      // Listen for the 'creds-saved' confirmation from code.js
+      if (msg.type === 'creds-saved') {
+        autoConnect();
+      }
+
+      // Receive OAuth token from callback page via window.postMessage
+      if (msg.type === 'oauth-token') {
+        token = msg.token;
+        // Send token to code.js to persist in clientStorage
+        parent.postMessage({ pluginMessage: { type: 'save-oauth-token', token: token } }, '*');
+      }
+    });
+
+
+    /* ── OAUTH CALLBACK HANDLER ──────────────────────────────────────────── */
+    // Opens Figma's OAuth consent page in a new window.
+    // The callback page (oauth-callback.html) will extract the auth code
+    // and send it back to this plugin via postMessage.
+    function handleOAuthCallback() {
+      const appId = 'gzHIayM6uhkHknhZwyZSKL';
+      const redirectUri = 'https://raw.githubusercontent.com/YOUR_USERNAME/figpm-plugin/main/oauth-callback.html';
+      const scope = 'file_content:read comments:read';
+      const state = Math.random().toString(36).substring(7);
+
+      // Store state in session for validation (optional but recommended)
+      window.oauthState = state;
+
+      const oauthUrl = `https://www.figma.com/oauth?client_id=${appId}&redirect_uri=${encodeURIComponent(redirectUri)}&response_type=code&scope=${encodeURIComponent(scope)}&state=${state}`;
+
+      // Open Figma OAuth page in a new window
+      window.open(oauthUrl, 'figma-oauth', 'width=500,height=600');
+    }
+
+
+    /* ── AUTO CONNECT ────────────────────────────────────────────────────── */
+    // Called when we have a saved token (either from init or after OAuth).
+    // Fetches comments from Figma API and shows the main plugin screen.
+    function autoConnect() {
+      hide('setup-screen');
+      fetchAndRender();
+    }
+
+
+    /* ── FETCH AND RENDER ───────────────────────────────────────────────── */
+    // Fetches all comments from the current Figma file using the API.
+    // Shows loading spinner while fetching, then renders the comment list.
+    async function fetchAndRender() {
+      show('loading-screen');
+      hide('plugin-screen');
+
+      try {
+        const comments = await fetchComments();
+        allComments = comments;
+        statuses = {};
+        selectedId = null;
+
+        // Show main screen and render comments
+        hide('loading-screen');
+        show('plugin-screen');
+        document.getElementById('file-name').textContent = fileName;
+        updateCounts();
+        render();
+      } catch (err) {
+        hide('loading-screen');
+        show('setup-screen');
+        showErr('Failed to fetch comments: ' + (err.message || 'Unknown error'));
+      }
+    }
+
+
+    /* ── FETCH COMMENTS ──────────────────────────────────────────────────── */
+    // Makes an API call to Figma to get all comments in the current file.
+    // Only fetches top-level comments (not nested replies).
+    async function fetchComments() {
+      if (!fileKey || !token) {
+        throw new Error('Missing file key or token');
+      }
+
+      const response = await fetch(`https://api.figma.com/v1/files/${fileKey}/comments`, {
+        headers: {
+          'X-Figma-Token': token,
+        },
+      });
+
+      if (!response.ok) {
+        if (response.status === 429) {
+          throw new Error('Rate limited. Please try again in a moment.');
+        }
+        throw new Error(`API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      return data.comments || [];
+    }
+
+
+    /* ── RENDER COMMENTS ─────────────────────────────────────────────────── */
+    // Builds and displays the comment list, grouped by status.
+    // Only shows comments that match the current filter.
+    function render() {
+      const list = document.getElementById('comment-list');
+
+      // Define the four status groups
+      const groups = [
+        { k: 'open', l: 'Open' },
+        { k: 'prog', l: 'In Progress' },
+        { k: 'clarify', l: 'Needs Clarification' },
+        { k: 'done', l: 'Done' },
+      ];
+
+      // Group comments by their current status
+      const grp = { open: [], prog: [], clarify: [], done: [] };
+      allComments.forEach(function(c) {
+        const st = getStatus(c.id);
+        const key = st === 'in-progress' ? 'prog' : st === 'clarify' ? 'clarify' : st === 'done' ? 'done' : 'open';
+        grp[key].push(c);
+      });
+
+      // Filter based on current filter tab
+      let html = '';
+      groups.forEach(function(g) {
+        const filtered = grp[g.k].filter(function(c) {
+          if (currentFilter === 'all') return true;
+          if (currentFilter === 'open') return !c.resolved_at && getStatus(c.id) !== 'done';
+          if (currentFilter === 'resolved') return c.resolved_at || getStatus(c.id) === 'done';
+          return true;
+        });
+
+        if (filtered.length === 0) return;
+
+        html += '<div class="grp-label">' + g.l + '</div>';
+        filtered.forEach(function(c, i) {
+          html += buildRow(c, g.k);
+          html += buildDetail(c, g.k);
+          if (i < filtered.length - 1) {
+            html += '<div class="c-divider"></div>';
+          }
+        });
+      });
+
+      list.innerHTML = html;
+    }
+
+
+    /* ── AVATAR COLOR ────────────────────────────────────────────────────── */
+    function avColor(str) {
+      var colors = [
+        '#e05050', '#e07820', '#a0a020', '#20a050',
+        '#20a0a0', '#2070e0', '#7050e0', '#c040b0'
+      ];
+      var n = 0;
+      for (var i = 0; i < str.length; i++) n += str.charCodeAt(i);
+      return colors[n % colors.length];
+    }
+
+
+    /* ── BUILD ROW ───────────────────────────────────────────────────────── */
+    function buildRow(c, grpKey) {
+      var id     = c.id;
+      var author = (c.user && c.user.handle) ? c.user.handle : 'Unknown';
+      var imgUrl = (c.user && c.user.img_url) ? c.user.img_url : '';
+      var text   = (c.message || '').slice(0, 100) + ((c.message || '').length > 100 ? '…' : '');
+      var time   = c.created_at ? timeAgo(c.created_at) : '';
+      var isSel  = selectedId === id;
+
+      var badges = {
+        open:    '<span class="c-badge cb-open"><span class="cb-dot"></span>Open</span>',
+        prog:    '<span class="c-badge cb-prog"><span class="cb-dot"></span>In Progress</span>',
+        clarify: '<span class="c-badge cb-clarify"><span class="cb-dot"></span>Clarify</span>',
+        done:    '<span class="c-badge cb-done"><span class="cb-dot"></span>Done</span>',
+      };
+
+      var avatarContent = imgUrl
+        ? '<img src="' + imgUrl + '" alt="">'
+        : author.slice(0, 2).toUpperCase();
+      var avatarStyle = imgUrl ? '' : 'background:' + avColor(author);
+
+      return '<div class="c-row' + (isSel ? ' sel' : '') + '" id="row-' + id + '" onclick="toggleRow(\'' + id + '\')">'
+        + '<div class="c-av" style="' + avatarStyle + '">' + avatarContent + '</div>'
+        + '<div class="c-body">'
+          + '<div class="c-meta">'
+            + '<span class="c-author">' + esc(author) + '</span>'
+            + '<span class="c-time">'   + time        + '</span>'
+          + '</div>'
+          + '<div class="c-msg' + (grpKey === 'done' ? ' done-txt' : '') + '">' + esc(text) + '</div>'
+          + (badges[grpKey] || badges.open)
+        + '</div>'
+      + '</div>';
+    }
+
+
+    /* ── BUILD DETAIL ────────────────────────────────────────────────────── */
+    function buildDetail(c, grpKey) {
+      var id    = c.id;
+      var isOpen = selectedId === id;
+
+      var curStatus = grpKey === 'prog'
+        ? 'in-progress'
+        : grpKey === 'done' ? 'done' : grpKey;
+
+      function statusBtn(statusValue, label) {
+        var activeClasses = {
+          'open':        'st-open',
+          'in-progress': 'st-prog',
+          'clarify':     'st-clarify',
+          'done':        'st-done',
+        };
+        var isActive = curStatus === statusValue;
+        return '<button class="st-btn' + (isActive ? ' ' + activeClasses[statusValue] : '')
+          + '" onclick="setSt(event, \'' + id + '\', \'' + statusValue + '\')">'
+          + label
+          + '</button>';
+      }
+
+      return '<div class="c-detail' + (isOpen ? ' open' : '') + '" id="det-' + id + '">'
+        + '<div class="detail-lbl">Status</div>'
+        + '<div class="status-pill-group">'
+          + statusBtn('open',        'Open')
+          + statusBtn('in-progress', 'In Progress')
+          + statusBtn('clarify',     'Clarify')
+          + statusBtn('done',        'Done')
+        + '</div>'
+      + '</div>';
+    }
+
+
+    /* ── TOGGLE ROW ──────────────────────────────────────────────────────── */
+    function toggleRow(id) {
+      selectedId = (selectedId === id) ? null : id;
+      render();
+    }
+
+
+    /* ── SET STATUS ──────────────────────────────────────────────────────── */
+    function setSt(event, id, status) {
+      event.stopPropagation();
+      statuses[id] = status;
+      render();
+      updateCounts();
+    }
+
+
+    /* ── SET FILTER ──────────────────────────────────────────────────────── */
+    function setFilter(el, filter) {
+      currentFilter = filter;
+      selectedId    = null;
+      document.querySelectorAll('.f-btn').forEach(function(b) {
+        b.classList.remove('active');
+      });
+      el.classList.add('active');
+      render();
+    }
+
+
+    /* ── GET STATUS ──────────────────────────────────────────────────────── */
+    function getStatus(id) {
+      return statuses[id] || 'open';
+    }
+
+
+    /* ── UPDATE COUNTS ───────────────────────────────────────────────────── */
+    function updateCounts() {
+      var total    = allComments.length;
+      var openCt   = allComments.filter(function(c) {
+        return !c.resolved_at && getStatus(c.id) !== 'done';
+      }).length;
+      var resolvedCt = total - openCt;
+
+      document.getElementById('file-ct').textContent      = total + ' comment' + (total !== 1 ? 's' : '');
+      document.getElementById('fc-all').textContent       = total;
+      document.getElementById('fc-open').textContent      = openCt;
+      document.getElementById('fc-resolved').textContent  = resolvedCt;
+    }
+
+
+    /* ── TIME AGO ────────────────────────────────────────────────────────── */
+    function timeAgo(iso) {
+      var seconds = Math.floor((new Date() - new Date(iso)) / 1000);
+      if (seconds < 60)   return 'just now';
+      if (seconds < 3600) return Math.floor(seconds / 60)   + 'm ago';
+      if (seconds < 86400) return Math.floor(seconds / 3600) + 'h ago';
+      return Math.floor(seconds / 86400) + 'd ago';
+    }
+
+
+    /* ── DISCONNECT ──────────────────────────────────────────────────────── */
+    // Clears saved credentials and shows setup screen again.
+    function disconnect() {
+      if (confirm('Disconnect from FigPM?')) {
+        token = null;
+        allComments = [];
+        statuses = {};
+        parent.postMessage({ pluginMessage: { type: 'clear-creds' } }, '*');
+        show('setup-screen');
+        hide('plugin-screen');
+        showErr('');
+      }
+    }
+
+
+    /* ── TOGGLE THEME ────────────────────────────────────────────────────── */
+    // Switches between dark and light theme.
+    function toggleTheme() {
+      const html = document.documentElement;
+      const current = html.getAttribute('data-theme') || 'dark';
+      const next = current === 'dark' ? 'light' : 'dark';
+      html.setAttribute('data-theme', next);
+      localStorage.setItem('figpm-theme', next);
+    }
+
+    // Load saved theme on startup
+    (function() {
+      const saved = localStorage.getItem('figpm-theme');
+      if (saved) {
+        document.documentElement.setAttribute('data-theme', saved);
+      }
+    })();
+
+
+    /* ── UTILITIES ───────────────────────────────────────────────────────── */
+
+    function show(id) { document.getElementById(id).classList.remove('hidden'); }
+    function hide(id) { document.getElementById(id).classList.add('hidden'); }
+    function showErr(msg) {
+      var el = document.getElementById('setup-error');
+      el.textContent  = msg;
+      el.style.display = msg ? 'block' : 'none';
+    }
+
+    function esc(str) {
+      return String(str)
+        .replace(/&/g,  '&amp;')
+        .replace(/</g,  '&lt;')
+        .replace(/>/g,  '&gt;')
+        .replace(/"/g,  '&quot;');
+    }
+
+  </script>
+
+</body>
+</html>
